@@ -1,87 +1,54 @@
 import streamlit as st
-import xarray as xr
-import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import mplcursors  # Import mplcursors for hover functionality
+import requests
 
-# Path to your NetCDF file
-NC_FILE_PATH = "climate-data.nc"
+# FastAPI backend URL
+API_URL = "http://localhost:8000/data"
 
-# Load dataset
-@st.cache_data
-def load_data():
-    ds = xr.open_dataset(NC_FILE_PATH)
-    return ds
+# Available datasets
+datasets = [
+    "lpjml_picontrol_2015_2100.nc",
+    "lpjml_ssp126_2015_2100.nc",
+    "lpjml_ssp370_2015_2100.nc",
+    "lpjml_ssp585_2015_2100.nc"
+]
 
-ds = load_data()
+# Streamlit Inputs
+dataset = st.sidebar.selectbox("Select Dataset", datasets)
+variable = st.sidebar.selectbox("Select Variable", ["mai", "soy", "ri1", "ri2", "swh", "wwh"])
+time_index = st.sidebar.slider("Select Time Index", min_value=0, max_value=100, value=0)
 
-# Extract latitude, longitude, and time information
-lat = ds["lat"].values.flatten()
-lon = ds["lon"].values.flatten()
-time_values = ds["time"].values.astype(int)  # Convert to numpy array of integers
+# Fetch data from FastAPI
+response = requests.get(f"{API_URL}/{dataset}/{variable}/{time_index}")
+data = response.json()
 
-# Available variables to plot
-variables = ["mai", "soy", "ri1", "ri2", "swh", "wwh"]
+if 'error' in data:
+    st.error(data['error'])
+else:
+    # Extract the data
+    lats = np.array(data["lats"])
+    lons = np.array(data["lons"])
+    values = np.array(data["data"])
 
-# Streamlit UI
-st.title("🌍 Climate Data Dashboard")
+    # Set up the plot
+    fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+    ax.set_title(f"{dataset} for {variable.upper()} Data for Time Index {time_index}")
+    
+    # Set the land and ocean features
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.add_feature(cfeature.LAND, color='lightgray', alpha=0.5)
+    ax.add_feature(cfeature.OCEAN, color='white')  # Set ocean color to white
+    
+    # Plot the data using pcolormesh
+    mesh = ax.pcolormesh(lons, lats, values, transform=ccrs.PlateCarree(), cmap='viridis')
 
-# Sidebar Inputs
-st.sidebar.header("🔍 Select Options")
+    # Add colorbar
+    cbar = fig.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.6)
+    cbar.set_label(f'{variable.upper()} Value')
 
-# Use slider for time selection
-time_index = st.sidebar.slider(
-    "Select Time Index", 
-    min_value=int(time_values.min()), 
-    max_value=int(time_values.max()), 
-    value=int(time_values[0]), 
-    step=1
-)
-
-variable = st.sidebar.selectbox("Select Variable", variables)
-
-# Adjust the time index selection for the dataset (assuming the time starts from 2015)
-time_index_adjusted = time_index - 2015
-
-# Extract the data for the selected variable and time index
-data_slice = ds[variable].isel(time=time_index_adjusted)
-
-# Extract latitudes and longitudes
-lats = ds['lat'].values
-lons = ds['lon'].values
-
-# Set up the figure for the selected variable
-fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-
-# Title for the plot
-ax.set_title(f"{variable.upper()} Data for {time_index}")
-
-# Add features to the plot
-ax.coastlines()
-ax.add_feature(cfeature.BORDERS, linestyle=':')
-ax.add_feature(cfeature.LAND, color='lightgray', alpha=0.5)
-
-# Plot the data for the selected variable
-values = data_slice.values
-mesh = ax.pcolormesh(lons, lats, values, transform=ccrs.PlateCarree(), cmap='viridis')
-
-# Add colorbar
-cbar = fig.colorbar(mesh, ax=ax, orientation='vertical', shrink=0.6)
-cbar.set_label(f'{variable.upper()} Value')
-
-# Add hover functionality
-mplcursors.cursor(mesh, hover=True).connect("add", lambda sel: sel.annotation.set_text(
-    f"Lat: {lats[sel.target.index[0]]:.2f}\nLon: {lons[sel.target.index[1]]:.2f}\nValue: {values[sel.target.index[0], sel.target.index[1]]:.2f}"
-))
-
-# Adjust layout
-plt.tight_layout()
-
-# Display the plot in Streamlit
-st.pyplot(fig)
-
-# Debugging Outputs
-st.write(f"✅ Loaded data for **{variable}** at time index **{time_index}**.")
+    # Display the plot
+    st.pyplot(fig)
