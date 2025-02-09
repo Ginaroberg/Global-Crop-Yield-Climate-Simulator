@@ -7,10 +7,9 @@ models.
    ```
    $ pip install -r requirements.txt
    ```
-2. Download the zipped .nc files and unzip them
+2. Download the zipped .nc files at https://drive.google.com/file/d/18LDvveHPB2UKAlJX0PS-6Wbe0Qa4eA8w/view?usp=drive_link and unzip them
    ```
-   Files can be found at this link https://drive.google.com/file/d/18LDvveHPB2UKAlJX0PS-6Wbe0Qa4eA8w/view?usp=drive_link ,
-   and then click extract all in the Repository folder
+   Files can be found at this above, and then click extract all in the Repository folder
    ```
 3. Start the FastAPI backend server in the same project folder
    ```
