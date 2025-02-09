@@ -1,18 +1,23 @@
-# 🎈 Blank app template
-
-A simple Streamlit app template for you to modify!
-
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
-
-### How to run it on your own machine
+Here are the steps needed in order to run the demo version of the website locally on your own computer. Please note that the current '
+interacitve implementation is slightly laggy, and that future versions will not require .nc file downloads but will instead run custom 
+models.
 
 1. Install the requirements
 
    ```
    $ pip install -r requirements.txt
    ```
-
-2. Run the app
+2. Download the zipped .nc files and unzip them
+   ```
+   Files can be found at this link https://drive.google.com/file/d/18LDvveHPB2UKAlJX0PS-6Wbe0Qa4eA8w/view?usp=drive_link ,
+   and then click extract all in the Repository folder
+   ```
+3. Start the FastAPI backend server in the same project folder
+   ```
+    $ uvicorn backend:app
+   ```
+   
+4. Run the app
 
    ```
    $ streamlit run streamlit_app.py
