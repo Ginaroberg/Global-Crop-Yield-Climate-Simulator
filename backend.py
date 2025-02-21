@@ -4,31 +4,34 @@ import os
 
 app = FastAPI()
 
-# Folder where NetCDF files are stored
+# 📂 NetCDF File Path
 DATA_FOLDER = "data"
+FILE_NAME = "outputs_piControl.nc"
+file_path = os.path.join(DATA_FOLDER, FILE_NAME)
 
-# Function to load NetCDF data
-def load_nc_data(file_name):
-    file_path = os.path.join(DATA_FOLDER, file_name)
+# 📌 Load NetCDF Data
+def load_nc_data():
     if not os.path.exists(file_path):
         return None
     return xr.open_dataset(file_path)
 
-@app.get("/datasets")
-async def list_datasets():
-    """Returns a list of available NetCDF files"""
-    return {"datasets": os.listdir(DATA_FOLDER)}
+dataset = load_nc_data()
 
-@app.get("/data/{dataset}/{variable}/{time_index}")
-async def get_nc_data(dataset: str, variable: str, time_index: int):
-    """Fetches specific climate data"""
-    ds = load_nc_data(dataset)
-    if ds is None or variable not in ds:
-        return {"error": "Dataset or variable not found"}
-    
-    # Replace NaN values with 0
-    data = ds[variable].isel(time=time_index).fillna(0).values.tolist()
-    lats = ds["lat"].values.tolist()
-    lons = ds["lon"].values.tolist()
-    
-    return {"lats": lats, "lons": lons, "data": data}
+@app.get("/data/{time_index}")
+async def get_climate_data(time_index: int):
+    """Fetches climate variables for all lat/lon points at a given time index"""
+    if dataset is None:
+        return {"error": "NetCDF file not found"}
+
+    # Extract variables for the selected time
+    climate_at_time = dataset.isel(time=time_index, member=0)
+
+    # Extract specific variables
+    tas = climate_at_time["tas"].values.tolist()  # Surface temperature
+    pr = climate_at_time["pr"].values.tolist()  # Precipitation
+    dtr = climate_at_time["diurnal_temperature_range"].values.tolist()  # Temp range
+
+    lats = dataset["lat"].values.tolist()
+    lons = dataset["lon"].values.tolist()
+
+    return {"lats": lats, "lons": lons, "tas": tas, "pr": pr, "dtr": dtr}

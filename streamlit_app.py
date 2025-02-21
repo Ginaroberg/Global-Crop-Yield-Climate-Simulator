@@ -1,104 +1,120 @@
 import streamlit as st
 import numpy as np
+import joblib
 import plotly.express as px
 import pandas as pd
-import requests
-from scipy.ndimage import zoom
-from plotly_resampler import FigureResampler
 
-API_URL = "http://localhost:8000/data"
+# 📂 Define crop variables
+crop_variables = ['mai', 'ri1', 'ri2', 'soy', 'swh', 'wwh']
+rf_models = {}
 
-datasets = [
-    "lpjml_picontrol_2015_2100.nc",
-    "lpjml_ssp126_2015_2100.nc",
-    "lpjml_ssp370_2015_2100.nc",
-    "lpjml_ssp585_2015_2100.nc"
-]
+# 📌 Load Models
+@st.cache_resource
+def load_models():
+    """Load trained crop yield prediction models."""
+    models = {}
+    for crop in crop_variables:
+        try:
+            model_path = f"models/{crop}_rf_model.pkl"
+            models[crop] = joblib.load(model_path)
+            st.sidebar.success(f"✅ {crop.upper()} model loaded")
+        except Exception as e:
+            st.sidebar.error(f"❌ Error loading {crop} model: {e}")
+    return models
 
+rf_models = load_models()
+
+# 📌 Load EOF Transformation
+eof_patterns = None
+try:
+    eof_patterns = joblib.load("models/eof_solvers.pkl")  # Ensure correct filename
+    st.write(eof_patterns[0])
+    eof_patterns = np.array(eof_patterns)  # Convert to NumPy array if necessary
+    st.sidebar.success("✅ EOF patterns loaded successfully")
+except Exception as e:
+    st.sidebar.error(f"❌ Error loading EOF patterns: {e}")
+
+# 📌 Sidebar UI
 st.sidebar.title("Model Inputs")
-dataset = st.sidebar.selectbox("Select Dataset", datasets)
-variable = st.sidebar.selectbox("Select Variable", ["Maize", "Soy Beans", "First Season Rice","Second Season Rice", "Spring Wheat", "Winter Wheat"])
-time_index = st.sidebar.slider("Select Time Index", 0, 100, 0)
+crop_selection = st.sidebar.selectbox("Select Crop", crop_variables)
 
-crop_dict = {
-    "Maize": "mai",
-    "Soy Beans": "soy",
-    "First Season Rice": "ri1",
-    "Second Season Rice": "ri2",
-    "Spring Wheat": "swh",
-    "Winter Wheat": "wwh",
-    }
+# 📌 Get Selected Model
+selected_model = rf_models.get(crop_selection)
 
-var_converted = crop_dict[variable]
+if selected_model:
+    num_features = getattr(selected_model, "n_features_in_", None)
 
-@st.cache_data(ttl=300)
-def fetch_data(dataset, variable, time_index):
-    try:
-        response = requests.get(f"{API_URL}/{dataset}/{variable}/{time_index}?resolution=5")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        return {"error": str(e)}
+    # 📌 Display Expected Features
+    if num_features:
+        st.sidebar.info(f"Model expects {num_features} input features.")
 
-data = fetch_data(dataset, var_converted, time_index)
+    # 📌 User Input Sliders for 7 Climate Variables
+    climate_vars = np.array([
+        st.sidebar.slider("Precipitation (mm)", 0, 300, 100),
+        st.sidebar.slider("Downward Longwave Radiation (W/m²)", 100, 400, 250),
+        st.sidebar.slider("Downward Shortwave Radiation (W/m²)", 100, 1000, 500),
+        st.sidebar.slider("Surface Wind Speed (m/s)", 0, 10, 5),
+        st.sidebar.slider("Near-surface Air Temperature (°C)", -10, 40, 20),
+        st.sidebar.slider("Daily Max Air Temperature (°C)", -10, 40, 30),
+        st.sidebar.slider("Daily Min Air Temperature (°C)", -10, 40, 10)
+    ]).reshape(1, -1)  # Shape: (1, 7)
 
-if "error" in data:
-    st.error(f"❌ Error: {data['error']}")
+    # 📌 Apply EOF Transformation
+    eof_features = None
+    st.write(eof_patterns.shape)
+    if eof_patterns is not None:
+        try:
+            # Ensure EOF matrix dimensions match input shape
+            if eof_patterns.shape[1] != climate_vars.shape[1]:
+                st.sidebar.error(f"❌ EOF transformation shape mismatch! EOF expects {eof_patterns.shape[1]} features but got {climate_vars.shape[1]}.")
+            else:
+                eof_features = np.dot(climate_vars, eof_patterns.T)  # Shape: (1, num_EOF_features)
+
+        except Exception as e:
+            st.sidebar.error(f"❌ EOF Transformation Error: {e}")
+            eof_features = None
+
+    # 📌 Validate Feature Count
+    if eof_features is None or (num_features and eof_features.shape[1] != num_features):
+        st.sidebar.warning(f"⚠️ Model expects {num_features} features, but got {eof_features.shape[1] if eof_features is not None else 'None'}.")
+
+    # 📌 Predict Yield
+    if eof_features is not None and st.sidebar.button("Predict Yield"):
+        try:
+            predicted_yield = selected_model.predict(eof_features)
+            st.sidebar.success(f"🌾 Predicted Yield: {predicted_yield[0]:.2f} tDM/ha")
+
+            # 📌 Generate Latitude & Longitude Data for Visualization
+            np.random.seed(42)
+            num_points = 100
+            df = pd.DataFrame({
+                "Latitude": np.random.uniform(-50, 50, num_points),
+                "Longitude": np.random.uniform(-180, 180, num_points),
+                "tDM/ha": np.random.uniform(predicted_yield[0] * 0.8, predicted_yield[0] * 1.2, num_points)
+            })
+
+            # 📌 Create Heatmap Visualization
+            fig = px.scatter_geo(
+                df, 
+                lat="Latitude", 
+                lon="Longitude", 
+                color="tDM/ha",
+                projection="natural earth",
+                title=f"{crop_selection.upper()} Predicted Yield",
+                color_continuous_scale="viridis",
+                hover_data=["tDM/ha"]
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.sidebar.error(f"❌ Prediction Error: {e}")
+
 else:
-    st.success("✅ Data Loaded Successfully!")
+    st.sidebar.warning("⚠️ No model loaded. Please check the model files.")
 
-    lats = np.array(data["lats"])
-    lons = np.array(data["lons"])
-    values = np.array(data["data"])
-
-    def downsample_data(lats, lons, values, factor=0.5):
-        return zoom(lats, factor), zoom(lons, factor), zoom(values, factor)
-
-    lats, lons, values = downsample_data(lats, lons, values, factor=0.5)
-
-    lon_grid, lat_grid = np.meshgrid(lons, lats)
-    df = pd.DataFrame({
-        "Longitude": lon_grid.flatten(),
-        "Latitude": lat_grid.flatten(),
-        "tDM/ha": values.flatten() #Tons of Dry Matter per Hectacre
-    })
-    crop_dict = {
-    "Maize": "mai",
-    "Soy Beans": "soy",
-    "First Season Rice": "ri1",
-    "Second Season Rice": "ri2",
-    "Spring Wheat": "swh",
-    "Winter Wheat": "wwh",
-    }
-
-    year=2015+time_index
-
-    fig = px.scatter_geo(
-        df, 
-        lat="Latitude", 
-        lon="Longitude", 
-        color="tDM/ha",
-        projection="natural earth",
-        title=f"{dataset} - {variable} Yields at Year {year}",
-        color_continuous_scale="viridis",
-        hover_data=["tDM/ha"]
-    )
-
-    fig.update_geos(
-        showcountries=True,  
-        countrycolor="black",
-        countrywidth=5,
-
-        showcoastlines=True,  
-        coastlinecolor="gray",
-        coastlinewidth=5,
-
-        showland=True, landcolor="lightgray",
-        showocean=True, oceancolor="white" 
-    )
-
-    fig = FigureResampler(fig)
-
-    plot_area = st.empty()  # Placeholder for updates
-    plot_area.plotly_chart(fig, use_container_width=True)
-    st.markdown("The Crop Yields are measured in Tons of Dry matter Per Hectacre (tDM/ha)")
+# 📌 App Description
+st.markdown("**🌾 Crop Yield Prediction Model**")
+st.write("This app predicts crop yields based on climate inputs using trained Random Forest models.")
+print("EOF Pattern Shape:", eof_patterns.shape)
+print("Climate Variable Shape:", climate_vars.shape)
