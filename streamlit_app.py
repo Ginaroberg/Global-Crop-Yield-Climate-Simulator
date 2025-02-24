@@ -1,120 +1,140 @@
 import streamlit as st
 import numpy as np
 import joblib
+import os
+import requests
+import gc  # Garbage collector for memory management
 import plotly.express as px
-import pandas as pd
+from sklearn.metrics import mean_squared_error  # For RMSE calculation
+import xarray as xr
+import plotly.graph_objects as go
 
-# 📂 Define crop variables
+
+
+# 📌 Streamlit UI Setup
+st.title("Crop Yield Prediction from Emissions (Random Forest)")
+st.sidebar.header("User Inputs: Greenhouse Gas Emissions")
+
+# 📌 User Inputs for Emissions
+co2 = st.sidebar.slider(" Concentration (ppm)", 200, 600, 400)
+ch4 = st.sidebar.slider("Methane emissions (CH₄) Concentration (ppb)", 1000, 2500, 1800)
+so2 = st.sidebar.slider("SO₂ Emissions (kt)", 0, 100, 50)
+bc  = st.sidebar.slider("Black Carbon Emissions (kt)", 0, 100, 20)
+
+# 📌 Model Paths
+MODEL_DIR = "models"
 crop_variables = ['mai', 'ri1', 'ri2', 'soy', 'swh', 'wwh']
-rf_models = {}
+crop_models = {crop: os.path.join(MODEL_DIR, f"{crop}_rf_model.pkl") for crop in crop_variables}
 
-# 📌 Load Models
+# 📌 Select Crop Type
+selected_crop = st.sidebar.selectbox("Select Crop Type", crop_variables)
+
+# Convert Single BC and SO₂ Values into Multiple Components
+bc_values = np.full(5, bc / 5)   # Spread BC across BC_0 to BC_4
+so2_values = np.full(5, so2 / 5) # Spread SO₂ across SO₂_0 to SO₂_4
+
+# 📌 Load Random Forest Model
 @st.cache_resource
-def load_models():
-    """Load trained crop yield prediction models."""
-    models = {}
-    for crop in crop_variables:
-        try:
-            model_path = f"models/{crop}_rf_model.pkl"
-            models[crop] = joblib.load(model_path)
-            st.sidebar.success(f"✅ {crop.upper()} model loaded")
-        except Exception as e:
-            st.sidebar.error(f"❌ Error loading {crop} model: {e}")
-    return models
+def load_crop_model(crop):
+    model_path = crop_models.get(crop)
+    if model_path and os.path.exists(model_path):
+        return joblib.load(model_path)
+    else:
+        st.sidebar.error(f"❌ Model not found for {crop}")
+        return None
 
-rf_models = load_models()
+model = load_crop_model(selected_crop)
 
-# 📌 Load EOF Transformation
-eof_patterns = None
-try:
-    eof_patterns = joblib.load("models/eof_solvers.pkl")  # Ensure correct filename
-    st.write(eof_patterns[0])
-    eof_patterns = np.array(eof_patterns)  # Convert to NumPy array if necessary
-    st.sidebar.success("✅ EOF patterns loaded successfully")
-except Exception as e:
-    st.sidebar.error(f"❌ Error loading EOF patterns: {e}")
+# 📌 Load Lat/Lon Data from FastAPI
+FASTAPI_URL = "http://localhost:8000"
+if st.sidebar.button("Load Locations"):
+    try:
+        response = requests.get(f"{FASTAPI_URL}/data/0")  # Fetch lat/lon from index 0
+        if response.status_code == 200:
+            data = response.json()
+            lats = np.array(data["lats"])
+            lons = np.array(data["lons"])
+            st.sidebar.success("✅ Locations Loaded")
+        else:
+            st.sidebar.error("Failed to fetch location data")
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
 
-# 📌 Sidebar UI
-st.sidebar.title("Model Inputs")
-crop_selection = st.sidebar.selectbox("Select Crop", crop_variables)
+# 📌 Predict Crop Yields Using Batching to Prevent Memory Issues
+if model and "lats" in locals() and "lons" in locals():
+    st.sidebar.success(f"✅ Model Loaded: {selected_crop}")
 
-# 📌 Get Selected Model
-selected_model = rf_models.get(crop_selection)
+    num_locations = len(lats) * len(lons)
+    
+    # Prepare Inputs for Prediction
+    emission_inputs = np.tile(
+        np.concatenate(([co2, ch4], bc_values, so2_values)), (num_locations, 1)
+    ) 
 
-if selected_model:
-    num_features = getattr(selected_model, "n_features_in_", None)
+    # Batch Processing
+    batch_size = 1000  
+    num_batches = int(np.ceil(emission_inputs.shape[0] / batch_size))
+    
+    pred_means = []
+    for i in range(num_batches):
+        batch = emission_inputs[i * batch_size : (i + 1) * batch_size]
+        predictions = model.predict(batch)
 
-    # 📌 Display Expected Features
-    if num_features:
-        st.sidebar.info(f"Model expects {num_features} input features.")
+        # Convert to NumPy array if needed
+        if isinstance(predictions, tuple):
+            predictions = predictions[0]  
+        if isinstance(predictions, xr.DataArray):
+            predictions = predictions.values  
+        
+        pred_means.append(predictions.flatten())
 
-    # 📌 User Input Sliders for 7 Climate Variables
-    climate_vars = np.array([
-        st.sidebar.slider("Precipitation (mm)", 0, 300, 100),
-        st.sidebar.slider("Downward Longwave Radiation (W/m²)", 100, 400, 250),
-        st.sidebar.slider("Downward Shortwave Radiation (W/m²)", 100, 1000, 500),
-        st.sidebar.slider("Surface Wind Speed (m/s)", 0, 10, 5),
-        st.sidebar.slider("Near-surface Air Temperature (°C)", -10, 40, 20),
-        st.sidebar.slider("Daily Max Air Temperature (°C)", -10, 40, 30),
-        st.sidebar.slider("Daily Min Air Temperature (°C)", -10, 40, 10)
-    ]).reshape(1, -1)  # Shape: (1, 7)
+    # Merge Predictions
+    predicted_yield = np.concatenate(pred_means).flatten()
 
-    # 📌 Apply EOF Transformation
-    eof_features = None
-    st.write(eof_patterns.shape)
-    if eof_patterns is not None:
-        try:
-            # Ensure EOF matrix dimensions match input shape
-            if eof_patterns.shape[1] != climate_vars.shape[1]:
-                st.sidebar.error(f"❌ EOF transformation shape mismatch! EOF expects {eof_patterns.shape[1]} features but got {climate_vars.shape[1]}.")
-            else:
-                eof_features = np.dot(climate_vars, eof_patterns.T)  # Shape: (1, num_EOF_features)
+    # Fix Shape Issues
+    if predicted_yield.size > num_locations:
+        predicted_yield = predicted_yield[:num_locations]
+    elif predicted_yield.size < num_locations:
+        st.error(f"❌ Model output size ({predicted_yield.size}) does not match expected ({num_locations}).")
+        st.stop()
 
-        except Exception as e:
-            st.sidebar.error(f"❌ EOF Transformation Error: {e}")
-            eof_features = None
+    # Reshape Predictions
+    predicted_yield = predicted_yield.reshape(len(lats), len(lons))
 
-    # 📌 Validate Feature Count
-    if eof_features is None or (num_features and eof_features.shape[1] != num_features):
-        st.sidebar.warning(f"⚠️ Model expects {num_features} features, but got {eof_features.shape[1] if eof_features is not None else 'None'}.")
+    # Free Memory
+    del model
+    gc.collect()
 
-    # 📌 Predict Yield
-    if eof_features is not None and st.sidebar.button("Predict Yield"):
-        try:
-            predicted_yield = selected_model.predict(eof_features)
-            st.sidebar.success(f"🌾 Predicted Yield: {predicted_yield[0]:.2f} tDM/ha")
+    # 📌 Plot using `scattergeo`
+    fig = go.Figure()
 
-            # 📌 Generate Latitude & Longitude Data for Visualization
-            np.random.seed(42)
-            num_points = 100
-            df = pd.DataFrame({
-                "Latitude": np.random.uniform(-50, 50, num_points),
-                "Longitude": np.random.uniform(-180, 180, num_points),
-                "tDM/ha": np.random.uniform(predicted_yield[0] * 0.8, predicted_yield[0] * 1.2, num_points)
-            })
+    fig.add_trace(go.Scattergeo(
+        lon=lons.repeat(len(lats)), 
+        lat=np.tile(lats, len(lons)),
+        text=[f"Yield: {y:.2f} tDM/ha" for y in predicted_yield.flatten()],  # Tooltip
+        marker=dict(
+            size=6,  # Marker size (adjustable)
+            color=predicted_yield.flatten(),  # Color by predicted yield
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="Yield (tDM/ha)"),
+            opacity=0.8
+        ),
+        mode="markers"
+    ))
 
-            # 📌 Create Heatmap Visualization
-            fig = px.scatter_geo(
-                df, 
-                lat="Latitude", 
-                lon="Longitude", 
-                color="tDM/ha",
-                projection="natural earth",
-                title=f"{crop_selection.upper()} Predicted Yield",
-                color_continuous_scale="viridis",
-                hover_data=["tDM/ha"]
-            )
+    # Configure World Map Layout
+    fig.update_layout(
+        title=f"Global Crop Yield Predictions ({selected_crop})",
+        geo=dict(
+            projection_type="equirectangular",  # Better world projection
+            showland=True,
+            showcoastlines=True,
+            showcountries=True,
+            landcolor="rgb(217, 217, 217)",
+            coastlinecolor="rgb(255, 255, 255)",
+        )
+    )
 
-            st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.sidebar.error(f"❌ Prediction Error: {e}")
-
-else:
-    st.sidebar.warning("⚠️ No model loaded. Please check the model files.")
-
-# 📌 App Description
-st.markdown("**🌾 Crop Yield Prediction Model**")
-st.write("This app predicts crop yields based on climate inputs using trained Random Forest models.")
-print("EOF Pattern Shape:", eof_patterns.shape)
-print("Climate Variable Shape:", climate_vars.shape)
+    # 📌 🎨 Show Map in Streamlit
+    st.plotly_chart(fig, use_container_width=True)
