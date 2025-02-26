@@ -1,5 +1,7 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
+
 import joblib
 import os
 import requests
@@ -16,7 +18,7 @@ st.title("Crop Yield Prediction from Emissions (Random Forest)")
 st.sidebar.header("User Inputs: Greenhouse Gas Emissions")
 
 # 📌 User Inputs for Emissions
-co2 = st.sidebar.slider(" Concentration (ppm)", 200, 600, 400)
+co2 = st.sidebar.slider("Carbon Dioxide Concentration (ppm)", 200, 600, 400)
 ch4 = st.sidebar.slider("Methane emissions (CH₄) Concentration (ppb)", 1000, 2500, 1800)
 so2 = st.sidebar.slider("SO₂ Emissions (kt)", 0, 100, 50)
 bc  = st.sidebar.slider("Black Carbon Emissions (kt)", 0, 100, 20)
@@ -68,7 +70,7 @@ if model and "lats" in locals() and "lons" in locals():
     
     # Prepare Inputs for Prediction
     emission_inputs = np.tile(
-        np.concatenate(([co2, ch4], bc_values, so2_values)), (num_locations, 1)
+        np.array([[co2, ch4, bc, so2]]), (num_locations, 1)
     ) 
 
     # Batch Processing
@@ -138,3 +140,5 @@ if model and "lats" in locals() and "lons" in locals():
 
     # 📌 🎨 Show Map in Streamlit
     st.plotly_chart(fig, use_container_width=True)
+    
+    # st.write("### Crop Yield vs. Selected Emission Variable")
