@@ -1,4 +1,4 @@
-data/
+
 temp/
 
 .streamlit/secrets.toml

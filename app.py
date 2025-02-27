@@ -16,11 +16,11 @@ max_so2 = 90.
 max_bc = 9.
 
 def normalize_inputs(data):
-    return np.asarray(data) / np.asarray([max_co2, max_ch4, max_so2, max_so2])
+    return np.asarray(data) / np.asarray([max_co2, max_ch4, max_so2, max_bc])
 
 
 def unnormalize_outputs(data):
-    return np.asarray(data) * np.asarray([max_co2, max_ch4, max_so2, max_so2])
+    return np.asarray(data) * np.asarray([max_co2, max_ch4, max_so2, max_bc])
 
 
 def global_mean(ds):
@@ -42,8 +42,6 @@ def main():
     @st.cache_resource
     def load_crop_model(crop):
         model_path = crop_models.get(crop)
-        print(model_path)
-        print(os.path.exists(model_path))
         if model_path and os.path.exists(model_path):
             st.sidebar.success(f"✅ Model Loaded: {selected_crop}")
             return joblib.load(model_path)  # ✅ Using `joblib.load()`
@@ -54,13 +52,13 @@ def main():
     model = load_crop_model(selected_crop)
 
     
-    yields, uncertainty = crop_gp(model, co2, ch4, so2, bc)
+    yields, uncertainty = crop_gp(model, selected_crop, co2, ch4, so2, bc)
 
     longitude, latitude = np.linspace(0, 360, 720), np.linspace(90, -90, 360)
     dataset = xr.DataArray(yields, coords={'latitude': (('latitude',), latitude), 'longitude': (('longitude',), longitude)})
 
     fig, ax = plt.subplots()
-    dataset.plot(ax=ax, cmap='coolwarm', vmax=6.)
+    dataset.plot.pcolormesh(ax=ax, cmap='coolwarm', vmax=6.)
 
 
     st.pyplot(fig)
@@ -80,13 +78,17 @@ def emissions_ui():
 # Load the Crop-Specific GP Model Using `joblib`
 
 
-def crop_gp(model, co2, ch4, so2, bc):
+def crop_gp(model, selected_crop, co2, ch4, so2, bc):
     inputs = tf.convert_to_tensor([[co2, ch4, so2, bc]], dtype=tf.float64)
     posterior_mean, posterior_var = model.predict_y(inputs) # predicted mean of GP, predicted variance of GP
     posterior_stddev = np.sqrt(posterior_var)
     
-    mask_all_nan_by_col = np.load('./data/mask.npy')
-    st.write(mask_all_nan_by_col.shape)
+    @st.cache_resource
+    def load_mask(mask_path, crop):
+        mask_file = os.path.join(mask_path, f"{crop}_mask.npy")
+        return np.load(mask_file)
+    
+    mask_all_nan_by_col = load_mask("./mask/", selected_crop)
     
     posterior_yield_mean_full = np.full((1, 259200), np.nan)  # fill with NaN
     posterior_yield_mean_full[:, ~mask_all_nan_by_col] = posterior_mean
