@@ -10,23 +10,6 @@ from sklearn.metrics import mean_squared_error  # For RMSE calculation
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import pandas as pd
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
-
-# Initialize Geocoder
-geolocator = Nominatim(user_agent="crop_yield_app")
-
-# Function to Get Location Names from Lat/Lon
-@st.cache_data  # Cache results to prevent repeated API calls
-def get_location(lat, lon):
-    try:
-        location = geolocator.reverse((lat, lon), exactly_one=True, language="en")
-        if location:
-            return location.address.split(", ")[-2:]  # Get city, country
-        else:
-            return "Unknown Location"
-    except GeocoderTimedOut:
-        return "Geocoder Timeout"
 
 
 
