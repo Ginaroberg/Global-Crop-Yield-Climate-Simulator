@@ -63,11 +63,21 @@ def crop_gp(model, selected_crop, co2, ch4, so2, bc):
     
     return posterior_yield, posterior_yield_stddev
 
+
+def get_country_yield(latitude, longitude, yields):
+    lat_grid, lon_grid = np.meshgrid(latitude, longitude, indexing="ij")
+    df = pd.DataFrame({
+    "lat": lat_grid.ravel(),
+    "lon": lon_grid.ravel(),
+    "yield": yields.ravel()
+    })
+    country_boundaries = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).drop(columns=["pop_est", "gdp_md_est"])
+    yield_gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
+    joined = gpd.sjoin(yield_gdf, country_boundaries, how="left", predicate="within")
+    country_yield = joined.groupby("name")["yield"].sum().reset_index()
+    return country_yield
+
 def main():
-    # Initializations
-    if "selected_country" not in st.session_state:
-        st.session_state.selected_country = None
-    
     # Streamlit UI Setup
     st.title("Crop Yield Prediction from Emissions")
     st.sidebar.header("User Inputs: Greenhouse Gas Emissions")
@@ -159,17 +169,7 @@ def main():
 
 
     # Tnteractive choropleth map showing crop yield sum by country
-    lat_grid, lon_grid = np.meshgrid(latitude, longitude, indexing="ij")
-    df = pd.DataFrame({
-    "lat": lat_grid.ravel(),
-    "lon": lon_grid.ravel(),
-    "yield": yields.ravel()
-    })
-    country_boundaries = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).drop(columns=["pop_est", "gdp_md_est"])
-    yield_gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
-    yield_countries = gpd.sjoin(yield_gdf, country_boundaries, how="left", predicate="within")
-    country_yield = yield_countries.groupby("name")["yield"].sum().reset_index()
-
+    country_yield = get_country_yield(latitude, longitude, yields)
     fig = px.choropleth(
         country_yield,
         locations="name",
