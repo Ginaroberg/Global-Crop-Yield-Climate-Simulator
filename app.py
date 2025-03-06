@@ -11,7 +11,11 @@ import pandas as pd
 import geopandas as gpd
 import plotly.graph_objects as go
 
-
+st.set_page_config(
+    page_title="Crop Yield Prediction",
+    layout="wide",  # Ensures a better layout
+    initial_sidebar_state="expanded"
+)
 
 max_co2 = 9500.
 max_ch4 = 0.8
@@ -96,7 +100,7 @@ def get_country_yield(latitude, longitude, yields):
 
 
 def main():
-    st.set_page_config(layout="wide")
+    # st.set_page_config(layout="wide")
     # Streamlit UI Setup
     st.title("Crop Yield Prediction from Emissions")
     st.sidebar.header("User Inputs: Greenhouse Gas Emissions")
