@@ -63,21 +63,40 @@ def crop_gp(model, selected_crop, co2, ch4, so2, bc):
     
     return posterior_yield, posterior_yield_stddev
 
+from shapely.geometry import Point
 
+#Load Natural Earth Country Boundaries
+@st.cache_data
+def load_country_shapefile():
+    shapefile_path = "110m_cultural/ne_110m_admin_0_countries.shp" 
+    return gpd.read_file(shapefile_path)
+
+gdf_countries = load_country_shapefile()
+
+#Aggregate Crop Yield by Country
 def get_country_yield(latitude, longitude, yields):
+    """
+    Aggregates crop yield by country using Natural Earth country boundaries.
+    https://www.naturalearthdata.com/downloads/110m-cultural-vectors/
+    """
     lat_grid, lon_grid = np.meshgrid(latitude, longitude, indexing="ij")
     df = pd.DataFrame({
-    "lat": lat_grid.ravel(),
-    "lon": lon_grid.ravel(),
-    "yield": yields.ravel()
+        "lat": lat_grid.ravel(),
+        "lon": lon_grid.ravel(),
+        "yield": yields.ravel()
     })
-    country_boundaries = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).drop(columns=["pop_est", "gdp_md_est"])
+
     yield_gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
-    joined = gpd.sjoin(yield_gdf, country_boundaries, how="left", predicate="within")
-    country_yield = joined.groupby("name")["yield"].sum().reset_index()
+
+    joined = gpd.sjoin(yield_gdf, gdf_countries, how="left", predicate="within")
+
+    country_yield = joined.groupby("NAME")["yield"].sum().reset_index()
+
     return country_yield
 
+
 def main():
+    st.set_page_config(layout="wide")
     # Streamlit UI Setup
     st.title("Crop Yield Prediction from Emissions")
     st.sidebar.header("User Inputs: Greenhouse Gas Emissions")
@@ -116,88 +135,161 @@ def main():
     # Choroplth Map of Predicted Crop Yields
     longitude, latitude = np.linspace(-179.75, 179.75, 720), np.linspace(89.75, -89.75, 360)
     dataset = xr.DataArray(yields, coords={'latitude': (('latitude',), latitude), 'longitude': (('longitude',), longitude)})
-    
-    # Create a Figure
-    fig = go.Figure()
-    fig.add_trace(go.Heatmap(
-        z=dataset.values,
-        x=longitude,
-        y=latitude,
-        colorbar=dict(
-            title=dict(text="Crop Yield (tDM/ha)", side="right"),
-            thickness=10,
-            len=1,
-            x=1.02
+        # **🌍 Create Side-by-Side Layout (Heatmap & Statistics Table)**
+    col1, col2 = st.columns([3, 1])  # Adjust width ratios for better layout
+
+    # **📊 Heatmap in Left Column**
+    with col1:
+        fig = go.Figure()
+        fig.add_trace(go.Heatmap(
+            z=dataset.values,
+            x=longitude,
+            y=latitude,
+            colorbar=dict(
+                title=dict(text="Crop Yield (tDM/ha)", side="right"),
+                thickness=10,
+                len=1,
+                x=1.02
             ),
-        hoverinfo="skip",
-        colorscale="Viridis"  # Use the Viridis colormap
-    ))
-    fig.update_layout(
-        title='Crop Yield Prediction from Emissions',
-        xaxis_title="Longitude",
-        yaxis_title="Latitude",
-        height=500,
-        width=1500,
-        xaxis=dict(
-            fixedrange=True,
-            showgrid=False,
-            tickvals=list(range(-180, 181, 30)),
-            ticktext=[str(i) + "°" for i in range(-180, 181, 30)]
-        ),
-        yaxis=dict(fixedrange=True,
-                   showgrid=False,
-                   zeroline=False,
-                   tickvals=list(range(-90, 91, 30)),
-                   ticktext=[str(i) + "°" for i in range(-90, 91, 30)]),
-        plot_bgcolor="white"
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
+            hoverinfo="skip",
+            colorscale="Viridis"  # Use the Viridis colormap
+        ))
 
-    #Global Mean Yield
-    global_mean_yield = np.nanmean(yields)
-    st.write(f"**Global Mean Crop Yield:** {global_mean_yield:.2f} tDM/ha")
+        fig.update_layout(
+            xaxis_title="Longitude",
+            yaxis_title="Latitude",
+            height=500,
+            width=1200,
+            xaxis=dict(
+                fixedrange=True,
+                showgrid=False,
+                tickvals=list(range(-180, 181, 30)),
+                ticktext=[str(i) + "°" for i in range(-180, 181, 30)]
+            ),
+            yaxis=dict(
+                fixedrange=True,
+                showgrid=False,
+                zeroline=False,
+                tickvals=list(range(-90, 91, 30)),
+                ticktext=[str(i) + "°" for i in range(-90, 91, 30)]
+            ),
+            plot_bgcolor="white"
+        )
 
-    #Max & Min Yield
-    max_yield = np.nanmax(yields)
-    st.write(f"**Maximum Predicted Yield:** {max_yield:.2f} tDM/ha")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Standard Deviation (Variability)
-    std_dev_yield = np.nanstd(yields)
-    st.write(f"**Standard Deviation of Yield:** {std_dev_yield:.2f} tDM/ha")
+    # **Simple Yield Statistics Table in Right Column**
+    with col2:
+        global_mean_yield = np.nanmean(yields)
+        max_yield = np.nanmax(yields)
+        std_dev_yield = np.nanstd(yields)
+        for _ in range(7): # spacing
+            st.write("")
+
+        st.write(f"**Global Mean Yield:** {global_mean_yield:.2f} tDM/ha")
+        st.write(f"**Maximum Yield:** {max_yield:.2f} tDM/ha")
+        st.write(f"**Standard Deviation:** {std_dev_yield:.2f} tDM/ha")
 
 
-
-    # Tnteractive choropleth map showing crop yield sum by country
+    # Interactive chloropleth and bar chart
     country_yield = get_country_yield(latitude, longitude, yields)
-    fig = px.choropleth(
-        country_yield,
-        locations="name",
-        locationmode="country names",
-        color="yield",
-        color_continuous_scale="Viridis",
-        projection='orthographic',
-        
-    )
-    fig.update_layout(height=700, width=700)
-    fig.update_coloraxes(colorbar_title="Crop Yield (tDM/ha)",
-                         colorbar_thickness=10,
-                         colorbar_len=0.75,
-                         )
-    st.plotly_chart(fig)
-    
+   
+    st.title("Top 20 Countries with Highest Crop Yield")
+    top_20_countries = country_yield.nlargest(20, "yield").sort_values("yield", ascending=True).copy()
 
+    col1, col2 = st.columns([1.2, 1.8]) 
 
+    #Bar Chart in Left Column**
+    with col1:
 
-    # Histogram of Yield Distribution
-    st.write("Yield Distribution (Histogram)")
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(yields.flatten(), bins=50, color="green", alpha=0.7, edgecolor="black")
-    ax.set_title("Distribution of Predicted Crop Yields")
-    ax.set_xlabel("Yield (tDM/ha)")
-    ax.set_ylabel("Frequency")
-    ax.grid(True)
-    st.pyplot(fig)
+        selected_country = st.selectbox(
+                "Select a country to highlight:", 
+                ["None"] + list(top_20_countries["NAME"])
+            )
+        bar_colors = ["red" if country == selected_country else "blue" for country in top_20_countries["NAME"]]
+
+        bar_fig = go.Figure()
+        bar_fig.add_trace(go.Bar(
+            x=top_20_countries["yield"],
+            y=top_20_countries["NAME"],
+            orientation="h",
+            marker=dict(color=bar_colors),
+            text=top_20_countries["yield"].round(2), 
+            textposition="outside", 
+            textfont=dict(size=14), 
+        ))
+
+        bar_fig.update_layout(
+ 
+            xaxis_title="Total Yield (tDM/ha)",
+            yaxis_title="Country",
+            height=600,
+            showlegend=False,
+            xaxis=dict(tickfont=dict(size=12)), 
+            yaxis=dict(tickfont=dict(size=14)), 
+        )
+
+        st.plotly_chart(bar_fig, use_container_width=True)
+
+    #Choropleth Map in Right Column**
+    with col2:
+
+        def plot_choropleth(selected_country):
+            fig = px.choropleth(
+                country_yield,
+                locations="NAME",
+                locationmode="country names",
+                color="yield",
+                color_continuous_scale="Viridis",
+                projection='orthographic',
+            )
+
+            if selected_country and selected_country != "None":
+                highlight_country = gdf_countries[gdf_countries["NAME"] == selected_country]
+
+                if not highlight_country.empty:
+                    country_center = highlight_country.geometry.centroid.iloc[0]
+
+                    fig.update_layout(
+                        geo=dict(
+                            projection_rotation=dict(lon=country_center.x, lat=country_center.y),
+                            projection_type="orthographic"
+                        )
+                    )
+
+                    boundary = highlight_country.geometry.boundary.iloc[0]
+
+                    lon_vals, lat_vals = [], []
+
+                    if boundary.geom_type == "MultiLineString":
+                        for line in boundary.geoms: 
+                            lon_vals.extend(list(line.xy[0])) 
+                            lat_vals.extend(list(line.xy[1])) 
+                    elif boundary.geom_type == "LineString":
+                        lon_vals = list(boundary.xy[0])
+                        lat_vals = list(boundary.xy[1]) 
+
+                    fig.add_trace(go.Scattergeo(
+                        lon=lon_vals,
+                        lat=lat_vals,
+                        mode="lines",
+                        line=dict(width=3, color="red"),
+                        name=f"Outline: {selected_country}"
+                    ))
+
+            fig.update_layout(
+                height=700, width=900,
+                margin=dict(l=50, r=50, t=50, b=50)
+            )
+            fig.update_coloraxes(
+                colorbar_title="Crop Yield (tDM/ha)",
+                colorbar_thickness=12,
+                colorbar_len=0.75
+            )
+
+            return fig
+
+        st.plotly_chart(plot_choropleth(selected_country), use_container_width=True)
 
     with st.expander("What Do These Units Mean?"):
         st.markdown("""
